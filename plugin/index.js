@@ -1,8 +1,6 @@
 import path, { dirname } from 'path'
 import { EOL } from 'os'
 import { readFileSync } from 'fs'
-import template from 'babel-template'
-import { parseExpression } from 'babylon'
 import gql from 'graphql-tag'
 
 let resolve
@@ -23,18 +21,33 @@ export default ({ types: t }) => ({
           query.parse()
           query.dedupeFragments()
           query.makeSourceEnumerable()
-          curPath.replaceWith(buildInlineVariableAST(query.ast))
+          replaceImportStatement(query.ast)
         }
 
-        function buildInlineVariableAST (graphqlAST) {
-          const buildAST = template(`
-            const QUERY_NAME = GQL_AST;
-          `)
+        // This function replaces the .gql import statement with code roughly equivalent to...
+        // let myQuery = `${graphqlAST}`;
+        // myQuery = JSON.parse(myQuery);
+        //
+        // This is meant to avoid problems encountered when creating Babel AST from GraphQL AST by
+        // simply "storing" the GraphQL AST as a string before parsing it into an object at runtime.
+        function replaceImportStatement (graphqlAST) {
+          const inlineVarName = curPath.node.specifiers[0].local.name
 
-          return buildAST({
-            QUERY_NAME: t.identifier(curPath.node.specifiers[0].local.name),
-            GQL_AST: parseExpression(JSON.stringify(graphqlAST))
-          })
+          curPath.replaceWithMultiple([
+            t.variableDeclaration('let', [
+              t.variableDeclarator(
+                t.identifier(inlineVarName),
+                t.stringLiteral(JSON.stringify(graphqlAST))
+              )
+            ]),
+            t.assignmentExpression(
+              '=',
+              t.identifier(inlineVarName),
+              t.callExpression(t.memberExpression(t.identifier('JSON'), t.identifier('parse')), [
+                t.identifier(inlineVarName)
+              ])
+            )
+          ])
         }
       }
     }
